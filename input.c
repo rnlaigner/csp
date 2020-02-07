@@ -138,12 +138,20 @@ partition_t Alloc_Partition(){
 
 }
 
-int h(int n){
+/*
+void Insert_Partition(int pos, Tuple * tuple){
     
+    pthread_mutex_lock(&e);
+
+    partitions[pos]->mutex
+
+}
+*/
+
+int h(uint64_t n){
     // h(k) = floor(m * (kA - floor(kA)))
     int pos = floor( NUM_PARTITIONS * ( n * A - floor(n * A)  ) );
-
-    printf("Positions based on hash function is: %d",pos);
+    // printf("Positions based on hash function is: %d",pos);
     return pos;
 }
 
@@ -155,10 +163,10 @@ int h(int n){
 
 void * writer(void *args) {
     
-    int i, start, end, id;
-/*
-    
+    int i, start, end, id, partition, nxtfree;
+    uint64_t key, payload;
 
+/*
 
     int * idx_t = (int *)args[0];
 
@@ -190,17 +198,30 @@ void * writer(void *args) {
 
         
 
-        // hash calc
-
-
-
         // get last bits
 
-        //int val = i & HASH_BITS;
+        key = i & HASH_BITS;
 
-        //printf("%d", val);
+        // hash calc
+        partition = h(key);
+
+        // build tuple
+        Tuple* tuple = malloc( sizeof(Tuple) );
+        tuple->key = key;
+        tuple->payload = (uint64_t) i;
 
         // access partitions
+        //Insert_Partition(partition, tuple);
+        pthread_mutex_lock(&partitions[partition]->mutex);
+
+        nxtfree = partitions[partition]->nxtfree;
+
+        partitions[partition]->tuples[nxtfree] = *tuple;
+
+        partitions[partition]->nxtfree = nxtfree + 1;
+
+        pthread_mutex_unlock(&partitions[partition]->mutex);
+        
 
 
 
@@ -259,7 +280,7 @@ int main(int argc, char *argv[]) {
 
     HASH_BITS = 3;
 
-    CARDINALITY = 24;
+    CARDINALITY = 10;//24;
     
 
     NUM_VALUES = pow(2,CARDINALITY);
@@ -297,8 +318,6 @@ int main(int argc, char *argv[]) {
     printf("Partitions allocation finished");
 
 
-
-
     int start = 1;
 
     int aux = NUM_VALUES / NUM_THREADS;
@@ -333,6 +352,28 @@ int main(int argc, char *argv[]) {
     for (i = 1; i <= NUM_THREADS; i++) {
 
         pthread_join(writers[i], NULL);
+
+    }
+
+    // Exhibit number of elements per partition
+    
+
+    int idx, j;
+    // teste para ver o que esta em cada particao
+    for(i = 0; i < NUM_PARTITIONS; i++) {
+
+        printf("Accessing partition %d\n",i);
+
+
+        idx = partitions[i]->nxtfree;
+        
+        for(j = idx - 1; j>= 0; j--){
+            
+            printf("Tuple idx %d value %ld\n",j,partitions[i]->tuples[j].payload);
+
+        }
+        
+
 
     }
 
