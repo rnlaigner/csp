@@ -148,10 +148,13 @@ void Insert_Partition(int pos, Tuple * tuple){
 }
 */
 
+// multiplication method
 int h(uint64_t n){
     // h(k) = floor(m * (kA - floor(kA)))
-    int pos = floor( NUM_PARTITIONS * ( n * A - floor(n * A)  ) );
-    // printf("Positions based on hash function is: %d",pos);
+    int pos;
+    double s = n * A;
+    double x = s - floor(s);
+    pos = floor( NUM_PARTITIONS * x );
     return pos;
 }
 
@@ -165,22 +168,6 @@ void * writer(void *args) {
     
     int i, start, end, id, partition, nxtfree;
     uint64_t key, payload;
-
-/*
-
-    int * idx_t = (int *)args[0];
-
-    int idx = *idx_t;
-
-
-	int * start_t = (int *)args[1];
-    int start = *start_t;
-
-
-    int * end_t = (int *)args[2];
-
-	int end = *end_t;
-*/
 
     ThreadInfo * info = args;
     start = info->start;
@@ -203,7 +190,7 @@ void * writer(void *args) {
         key = i & HASH_BITS;
 
         // hash calc
-        partition = h(key);
+        partition = h(i);
 
         // build tuple
         Tuple* tuple = malloc( sizeof(Tuple) );
@@ -280,7 +267,7 @@ int main(int argc, char *argv[]) {
 
     HASH_BITS = 3;
 
-    CARDINALITY = 10;//24;
+    CARDINALITY = 24;
     
 
     NUM_VALUES = pow(2,CARDINALITY);
@@ -355,10 +342,23 @@ int main(int argc, char *argv[]) {
 
     }
 
-    // Exhibit number of elements per partition
-    
-
     int idx, j;
+
+    // Exhibit number of elements per partition
+    for(i = 0; i < NUM_PARTITIONS; i++) {
+
+        printf("Accessing partition %d\n",i);
+
+
+        idx = partitions[i]->nxtfree;
+        
+        printf("Number of elements == %d\n", idx);
+        
+
+
+    }    
+
+/*    
     // teste para ver o que esta em cada particao
     for(i = 0; i < NUM_PARTITIONS; i++) {
 
@@ -376,6 +376,7 @@ int main(int argc, char *argv[]) {
 
 
     }
+*/
 
 
 }
