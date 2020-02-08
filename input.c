@@ -197,6 +197,8 @@ void * writer(void *args) {
         tuple->key = key;
         tuple->payload = (uint64_t) i;
 
+        //printf("Tentative to access partition %d from thread %d\n",partition,id);
+
         // access partitions
         //Insert_Partition(partition, tuple);
         pthread_mutex_lock(&partitions[partition]->mutex);
@@ -208,7 +210,8 @@ void * writer(void *args) {
         partitions[partition]->nxtfree = nxtfree + 1;
 
         pthread_mutex_unlock(&partitions[partition]->mutex);
-        
+
+        //printf("Left mutex of partition %d from thread %d\n",partition,id);        
 
 
 
@@ -263,7 +266,7 @@ int main(int argc, char *argv[]) {
     CARDINALITY = atoi(argv[3]);
 */
 
-    NUM_THREADS = 1;
+    NUM_THREADS = 2;
 
     HASH_BITS = 3;
 
@@ -316,6 +319,9 @@ int main(int argc, char *argv[]) {
 
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
+
+    // TODO touch all pages before writing output
+
    
 
     // create threads; pass by parameter its respective range of values
@@ -330,7 +336,7 @@ int main(int argc, char *argv[]) {
 
         start = (aux * i) + 1;
 
-        aux = aux * i;
+        aux = aux * (i + 1);
 
     }
 
