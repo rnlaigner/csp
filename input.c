@@ -7,12 +7,19 @@
 #include <pthread.h>
 
 #include <stdlib.h>
+
 #include <string.h>
+
 #include <time.h>
+
+
 
 /* ======== DEFINITIONS ======== */
 
+
+
 #define VERBOSE 1
+#define CARDINALITY 24
 
 
 
@@ -134,6 +141,8 @@ void * writer(void *args);
 
 Tuple * Alloc_Tuples();
 
+
+
 partition_t Alloc_Partition();
 
 
@@ -177,6 +186,7 @@ void * writer(void *args) {
     int i, start, end, id, partition, nxtfree;
 
     uint64_t key, payload;
+
     double s, x;
 
 
@@ -190,11 +200,13 @@ void * writer(void *args) {
     id = info->id;
 
 
+
 #if (VERBOSE == 1)
 
     printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
 
 #endif
+
 	
 
     // For each value, mount the tuple and assigns it to given partition
@@ -210,7 +222,9 @@ void * writer(void *args) {
 
 
         // hash calc by multiplication method
+
         // h(k) = floor(m * (kA - floor(kA)))
+
 	    s = i * A;
 
         x = s - floor(s);
@@ -228,11 +242,13 @@ void * writer(void *args) {
         tuple->payload = (uint64_t) i;
 
 
+
 #if (VERBOSE == 1)
 
         printf("Tentative to access partition %d from thread %d\n",partition,id);
 
 #endif
+
 
 
         // access partitions
@@ -244,10 +260,8 @@ void * writer(void *args) {
         nxtfree = partitions[partition]->nxtfree;
 
 
-        // Which method to use?
-        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
 
-        // partitions[partition]->tuples[nxtfree] = *tuple;
+        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
 
 
 
@@ -256,6 +270,7 @@ void * writer(void *args) {
 
 
         pthread_mutex_unlock(&partitions[partition]->mutex);
+
 
 
 #if (VERBOSE == 1)
@@ -280,7 +295,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    int NUM_THREADS, CARDINALITY;
+    int NUM_THREADS;
 
     int NUM_VALUES;
 
@@ -290,7 +305,7 @@ int main(int argc, char *argv[]) {
 
     printf("************************************************************************************\n");
 
-    printf("Parameters expected are: (t) number of threads (b) hash bits (c) cardinality expoent\n");
+    printf("Parameters expected are: (t) number of threads (b) hash bits\n");
 
 
 
@@ -304,7 +319,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    printf("Parameters received are: %s, %s, and %s\n", argv[1], argv[2], argv[3]);
+    printf("Parameters received are: %s and %s\n", argv[1], argv[2]);
 
 
 
@@ -312,7 +327,6 @@ int main(int argc, char *argv[]) {
 
     HASH_BITS = atoi(argv[2]);
 
-    CARDINALITY = atoi(argv[3]);
 
 
 // DEFAULT VALUES FOR TESTING PURPOSES
@@ -323,8 +337,6 @@ int main(int argc, char *argv[]) {
 
     HASH_BITS = 3;
 
-    CARDINALITY = 24;
-
 */
 
     NUM_VALUES = pow(2,CARDINALITY);
@@ -333,11 +345,11 @@ int main(int argc, char *argv[]) {
 
 
 
-    // if we consider our hash function divides the tuples to partitions evenly,
+    /* if we consider our hash function divides the tuples to partitions evenly,
 
-    // then we can increase 50% the size of the partition in order to not deal
+     then we can increase 50% the size of the partition in order to not deal
 
-    // with resizing during partitioning process
+     with resizing during partitioning process */
 
     PARTITION_SIZE = (NUM_VALUES / NUM_THREADS) + ( (NUM_VALUES / NUM_THREADS) / 2 );
 
@@ -377,6 +389,8 @@ int main(int argc, char *argv[]) {
 
     // TODO touch all pages before writing output
 
+
+
     clock_t begin = clock();
 
    
@@ -409,14 +423,17 @@ int main(int argc, char *argv[]) {
 
     }
 
+
+
     clock_t end = clock();
+
+
 
     double time_spent = (end - begin) / CLOCKS_PER_SEC;
 
 
-#if (VERBOSE == 1)
-    printf("Elapsed: %f seconds\n", (double));
 
+#if (VERBOSE == 1)
 
     int idx, j;
 
@@ -425,6 +442,7 @@ int main(int argc, char *argv[]) {
     for(i = 0; i < NUM_PARTITIONS; i++) {
 
         idx = partitions[i]->nxtfree;
+
 	printf("Accessing partition %d\n",i);
 
         printf("Number of elements == %d\n", idx);
@@ -434,7 +452,8 @@ int main(int argc, char *argv[]) {
    
 
     // teste para ver o que esta em cada particao
-/*
+
+
 
     for(i = 0; i < NUM_PARTITIONS; i++) {
 
@@ -449,12 +468,11 @@ int main(int argc, char *argv[]) {
         }
 
     }
-*/
 
 #endif
 
-    // TODO output time spent
 
-
+    printf("It took %f seconds to execute \n", time_spent); 
+    return 0;
 
 }
