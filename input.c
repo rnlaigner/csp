@@ -5,11 +5,23 @@
 #include <math.h>
 
 #include <pthread.h>
+
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+/* ======== DEFINITIONS ======== */
+
+#define VERBOSE 1
+
+
 
 /* ======== DEFAULT VARIABLE VALUES ======== */
 
+
+
 // see Knuth, "Sorting and Searching", v. 3 of "The Art of Computer Programming"
+
 double A = 0.6180339887;
 
 
@@ -46,15 +58,27 @@ typedef struct partition {
 
 } Partition;
 
+
+
 typedef Partition * partition_t;
 
+
+
 typedef struct thread_info {
+
     int id;
+
     int start;
+
     int end;
+
 } ThreadInfo;
 
+
+
 typedef ThreadInfo * thread_info_t;
+
+
 
 /* ======== ATTRIBUTE DECLARATIONS ======== */
 
@@ -70,16 +94,28 @@ partition_t * partitions;
 
 pthread_t * writers;
 
+
+
 /* number of hash bits to be used */
+
 int HASH_BITS;
 
+
+
 /* number of partitions */
+
 int NUM_PARTITIONS;
 
+
+
 /* number of positions in a partition */
+
 int PARTITION_SIZE;
 
+
+
 /* array that stores thread info for all threads */
+
 thread_info_t * thread_info_array;
 
 
@@ -88,7 +124,7 @@ thread_info_t * thread_info_array;
 
 
 
-
+void * writer(void *args);
 
 
 
@@ -96,7 +132,9 @@ thread_info_t * thread_info_array;
 
 
 
+Tuple * Alloc_Tuples();
 
+partition_t Alloc_Partition();
 
 
 
@@ -114,48 +152,16 @@ Tuple * Alloc_Tuples() {
 
 
 
-partition_t Alloc_Partition(){
-
-    
+partition_t Alloc_Partition() {
 
     partition_t partition = malloc( sizeof(Partition) );
 
     partition->tuples = Alloc_Tuples();
 
-    partition->nxtfree = 0;
-
-    
-
-    // TODO verify if it works    
-
     pthread_mutex_init(&partition->mutex, NULL);
-
-
 
     return partition;
 
-
-
-}
-
-/*
-void Insert_Partition(int pos, Tuple * tuple){
-    
-    pthread_mutex_lock(&e);
-
-    partitions[pos]->mutex
-
-}
-*/
-
-// multiplication method
-int h(uint64_t n){
-    // h(k) = floor(m * (kA - floor(kA)))
-    int pos;
-    double s = n * A;
-    double x = s - floor(s);
-    pos = floor( NUM_PARTITIONS * x );
-    return pos;
 }
 
 
@@ -165,18 +171,30 @@ int h(uint64_t n){
 
 
 void * writer(void *args) {
+
     
+
     int i, start, end, id, partition, nxtfree;
+
     uint64_t key, payload;
+    double s, x;
+
+
 
     ThreadInfo * info = args;
+
     start = info->start;
+
     end = info->end;
+
     id = info->id;
 
 
-	printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
+#if (VERBOSE == 1)
 
+    printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
+
+#endif
 	
 
     // For each value, mount the tuple and assigns it to given partition
@@ -189,31 +207,62 @@ void * writer(void *args) {
 
         key = i & HASH_BITS;
 
-        // hash calc
-        partition = h(i);
+
+
+        // hash calc by multiplication method
+        // h(k) = floor(m * (kA - floor(kA)))
+	    s = i * A;
+
+        x = s - floor(s);
+
+        partition = floor( NUM_PARTITIONS * x );
+
+
 
         // build tuple
+
         Tuple* tuple = malloc( sizeof(Tuple) );
+
         tuple->key = key;
+
         tuple->payload = (uint64_t) i;
 
-        //printf("Tentative to access partition %d from thread %d\n",partition,id);
+
+#if (VERBOSE == 1)
+
+        printf("Tentative to access partition %d from thread %d\n",partition,id);
+
+#endif
+
 
         // access partitions
-        //Insert_Partition(partition, tuple);
+
         pthread_mutex_lock(&partitions[partition]->mutex);
+
+
 
         nxtfree = partitions[partition]->nxtfree;
 
-        partitions[partition]->tuples[nxtfree] = *tuple;
+
+        // Which method to use?
+        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
+
+        // partitions[partition]->tuples[nxtfree] = *tuple;
+
+
 
         partitions[partition]->nxtfree = nxtfree + 1;
 
+
+
         pthread_mutex_unlock(&partitions[partition]->mutex);
 
-        //printf("Left mutex of partition %d from thread %d\n",partition,id);        
 
+#if (VERBOSE == 1)
 
+        printf("Left mutex of partition %d from thread %d\n",partition,id);        
+
+#endif
 
     }
 
@@ -239,24 +288,24 @@ int main(int argc, char *argv[]) {
 
 
 
-
     printf("************************************************************************************\n");
 
     printf("Parameters expected are: (t) number of threads (b) hash bits (c) cardinality expoent\n");
 
-/*
-    if(argv[1] && argv[2] && argv[3]){} else {
+
+
+    if(argc == 1) {
+
         fprintf(stderr, "ERROR: Cannot proceed without proper input\n");
 
         exit(0);
+
     }
 
 
 
-    printf("Parameters received are: %c, %c, and %c\n", *argv[1], *argv[2], *argv[3]);
+    printf("Parameters received are: %s, %s, and %s\n", argv[1], argv[2], argv[3]);
 
-
-    printf("Parsing input ...\n");
 
 
     NUM_THREADS = atoi(argv[1]);
@@ -264,14 +313,19 @@ int main(int argc, char *argv[]) {
     HASH_BITS = atoi(argv[2]);
 
     CARDINALITY = atoi(argv[3]);
-*/
+
+
+// DEFAULT VALUES FOR TESTING PURPOSES
+
+/*
 
     NUM_THREADS = 2;
 
     HASH_BITS = 3;
 
     CARDINALITY = 24;
-    
+
+*/
 
     NUM_VALUES = pow(2,CARDINALITY);
 
@@ -294,8 +348,6 @@ int main(int argc, char *argv[]) {
     partitions = malloc( NUM_PARTITIONS * sizeof(Partition) );
 
 
-    printf("Start allocation of partitions");
-
 
     // alloc output partitions
 
@@ -305,31 +357,40 @@ int main(int argc, char *argv[]) {
 
     }
 
-    printf("Partitions allocation finished");
 
 
     int start = 1;
 
     int aux = NUM_VALUES / NUM_THREADS;
 
-    printf("Aux is %d\n",aux);
+
 
     // allocate writers
+
     writers = (pthread_t *)malloc(NUM_THREADS * sizeof(pthread_t));
+
+
 
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
 
+
     // TODO touch all pages before writing output
+
+    clock_t begin = clock();
 
    
 
     // create threads; pass by parameter its respective range of values
 
     for(i = 1; i <= NUM_THREADS; i++) {
+
         thread_info_array[i] = malloc( sizeof(ThreadInfo) );
+
         thread_info_array[i]->id = i;
+
         thread_info_array[i]->start = start;
+
         thread_info_array[i]->end = aux;
 
         pthread_create(&(writers[i]), NULL, writer, thread_info_array[i]);
@@ -348,41 +409,52 @@ int main(int argc, char *argv[]) {
 
     }
 
+    clock_t end = clock();
+
+    double time_spent = (end - begin) / CLOCKS_PER_SEC;
+
+
+#if (VERBOSE == 1)
+    printf("Elapsed: %f seconds\n", (double));
+
+
     int idx, j;
 
     // Exhibit number of elements per partition
+
     for(i = 0; i < NUM_PARTITIONS; i++) {
 
-        printf("Accessing partition %d\n",i);
-
-
         idx = partitions[i]->nxtfree;
-        
-        printf("Number of elements == %d\n", idx);
-        
+	printf("Accessing partition %d\n",i);
 
+        printf("Number of elements == %d\n", idx);
 
     }    
 
-/*    
+   
+
     // teste para ver o que esta em cada particao
+/*
+
     for(i = 0; i < NUM_PARTITIONS; i++) {
 
         printf("Accessing partition %d\n",i);
 
-
         idx = partitions[i]->nxtfree;
-        
+
         for(j = idx - 1; j>= 0; j--){
-            
+
             printf("Tuple idx %d value %ld\n",j,partitions[i]->tuples[j].payload);
 
         }
-        
-
 
     }
 */
+
+#endif
+
+    // TODO output time spent
+
 
 
 }
