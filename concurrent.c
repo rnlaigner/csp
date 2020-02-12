@@ -53,9 +53,6 @@ partition_t * partitions;
 /* array to store writers */
 pthread_t * writers;
 
-/* barrier to wait for all writers */
-pthread_barrier_t barrier;
-
 /* number of threads to execute */
 int NUM_THREADS;
 
@@ -148,8 +145,6 @@ void * writer(void *args) {
         printf("Left mutex of partition %d from thread %d\n",partition,id);        
 #endif
     }
-
-    pthread_barrier_wait(&barrier);
     
 }
 
@@ -175,8 +170,6 @@ void Collect_Timing_Info(){
 
     for(trial = 0; trial < TRIALS; trial++){
 
-        pthread_barrier_init(&barrier, NULL, NUM_THREADS);
-
         int start = 1;
         int aux = NUM_VALUES / NUM_THREADS;
         begin = clock();
@@ -192,8 +185,6 @@ void Collect_Timing_Info(){
             aux = aux * (i + 1);
         }
 
-        //pthread_barrier_wait(&barrier);
-
         for (i = 1; i <= NUM_THREADS; i++) {
             pthread_join(writers[i], NULL);
         }
@@ -206,8 +197,6 @@ void Collect_Timing_Info(){
 #if (VERBOSE == 1)
         printf("Trial #%d took %f seconds to execute\n", trial, time_spent);
 #endif
-        
-        pthread_barrier_destroy(&barrier);
 
         // set default idx (0) for each partition after a trial to avoid segmentation fault
         Default_Output_Partitions();
