@@ -106,7 +106,7 @@ void Collect_Timing_Info(){
 
     int i, trial;
 
-    for(trial = 1; trial <= TRIALS; trial++){
+    for(trial = 0; trial < TRIALS; trial++){
 
         int start = 1;
         int aux = NUM_VALUES / NUM_THREADS;
@@ -141,6 +141,31 @@ void Collect_Timing_Info(){
 }
 
 void Output_Timing_Result_To_File(){
+
+    FILE *fptr;
+    char filename[100];
+    sprintf(filename, "%d_%d.txt", NUM_THREADS, HASH_BITS);
+
+    fptr = fopen(filename,"w");
+
+    if(fptr == NULL)
+    {
+        printf("Error!");
+        exit(1);    
+    }
+
+    int trial;
+    float avg, sum;
+    sum = 0.0;
+
+    for(trial = 0; trial < TRIALS; trial++){
+        sum = sum + RUN[trial];
+    }
+
+    avg = sum / TRIALS;
+
+    fprintf(fptr,"%f",avg);
+    fclose(fptr);
 
 }
 
