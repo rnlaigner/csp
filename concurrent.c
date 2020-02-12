@@ -53,6 +53,9 @@ partition_t * partitions;
 /* array to store writers */
 pthread_t * writers;
 
+/* barrier to wait for all writers */
+pthread_barrier_t barrier;
+
 /* number of threads to execute */
 int NUM_THREADS;
 
@@ -88,6 +91,68 @@ void Collect_Timing_Info();
 
 void Output_Timing_Result_To_File();
 
+static inline int Hash(uint64_t i);
+
+void Default_Output_Partitions();
+
+void Touch_Partitions();
+
+/* ======== THREAD FUNCTION IMPLEMENTATION ======== */
+
+void * writer(void *args) {
+    
+    int i, start, end, id, partition, nxtfree;
+    uint64_t key, payload;
+
+    ThreadInfo * info = args;
+    start = info->start;
+    end = info->end;
+    id = info->id;
+
+#if (VERBOSE == 1)
+    printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
+#endif
+	
+    // For each value, mount the tuple and assigns it to given partition
+    for (i = start; i <= end; i++) {
+        
+        // get last bits
+        key = i & HASH_BITS;
+        //partition = Hash(key);
+        partition = key % NUM_PARTITIONS;
+
+        // build tuple
+        Tuple* tuple = malloc( sizeof(Tuple) );
+        tuple->key = key;
+        tuple->payload = (uint64_t) i;
+
+#if (VERBOSE == 2)
+        printf("Tentative to access partition %d from thread %d\n",partition,id);
+#endif
+
+        // access partitions
+        pthread_mutex_lock(&partitions[partition]->mutex);
+
+        nxtfree = partitions[partition]->nxtfree;
+
+        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
+
+        partitions[partition]->nxtfree = nxtfree + 1;
+
+        pthread_mutex_unlock(&partitions[partition]->mutex);
+
+	    // free
+        free(tuple);
+
+#if (VERBOSE == 2)
+        printf("Left mutex of partition %d from thread %d\n",partition,id);        
+#endif
+    }
+
+    pthread_barrier_wait(&barrier);
+    
+}
+
 /* ======== FUNCTION IMPLEMENTATION ======== */
 
 Tuple * Alloc_Tuples() {
@@ -105,12 +170,16 @@ partition_t Alloc_Partition() {
 void Collect_Timing_Info(){
 
     int i, trial;
+    double time_spent;
+    clock_t begin, end;
 
     for(trial = 0; trial < TRIALS; trial++){
 
+        pthread_barrier_init(&barrier, NULL, NUM_THREADS);
+
         int start = 1;
         int aux = NUM_VALUES / NUM_THREADS;
-        clock_t begin = clock();
+        begin = clock();
        
         // create threads; pass by parameter its respective range of values
         for(i = 1; i <= NUM_THREADS; i++) {
@@ -123,19 +192,26 @@ void Collect_Timing_Info(){
             aux = aux * (i + 1);
         }
 
+        //pthread_barrier_wait(&barrier);
+
         for (i = 1; i <= NUM_THREADS; i++) {
             pthread_join(writers[i], NULL);
         }
 
-        clock_t end = clock();
+        end = clock();
 
-        double time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
+        time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
 
         RUN[trial] = time_spent;
 #if (VERBOSE == 1)
         printf("Trial #%d took %f seconds to execute\n", trial, time_spent);
 #endif
-        //printf("It took %f seconds to execute \n", time_spent);
+        
+        pthread_barrier_destroy(&barrier);
+
+        // set default idx (0) for each partition after a trial to avoid segmentation fault
+        Default_Output_Partitions();
+
     }
 
 }
@@ -169,70 +245,47 @@ void Output_Timing_Result_To_File(){
 
 }
 
-/* ======== THREAD FUNCTION IMPLEMENTATION ======== */
-
-void * writer(void *args) {
-    
-    int i, start, end, id, partition, nxtfree;
-    uint64_t key, payload;
+// instructs the compiler to embed the function
+static inline int Hash(uint64_t i){
     double s, x;
+    // hash calc by multiplication method
+    // h(k) = floor(m * (kA - floor(kA)))
+    s = i * A;
+    x = s - floor(s);
+    int partition = floor( NUM_PARTITIONS * x );
+    return partition;
+}
 
-    ThreadInfo * info = args;
-    start = info->start;
-    end = info->end;
-    id = info->id;
-
-#if (VERBOSE == 1)
-    printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
-#endif
-	
-    // For each value, mount the tuple and assigns it to given partition
-    for (i = start; i <= end; i++) {
-        
-        // get last bits
-        key = i & HASH_BITS;
-
-        // hash calc by multiplication method
-        // h(k) = floor(m * (kA - floor(kA)))
-	    s = i * A;
-        x = s - floor(s);
-        partition = floor( NUM_PARTITIONS * x );
-
-        // build tuple
-        Tuple* tuple = malloc( sizeof(Tuple) );
-        tuple->key = key;
-        tuple->payload = (uint64_t) i;
-
-#if (VERBOSE == 2)
-        printf("Tentative to access partition %d from thread %d\n",partition,id);
-#endif
-
-        // access partitions
-        pthread_mutex_lock(&partitions[partition]->mutex);
-
-        nxtfree = partitions[partition]->nxtfree;
-
-        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
-
-        partitions[partition]->nxtfree = nxtfree + 1;
-
-        pthread_mutex_unlock(&partitions[partition]->mutex);
-
-	    // free
-        free(tuple);
-
-#if (VERBOSE == 2)
-        printf("Left mutex of partition %d from thread %d\n",partition,id);        
-#endif
+void Default_Output_Partitions(){
+    int i;
+    for(i = 0; i < NUM_PARTITIONS; i++) {
+        partitions[i]->nxtfree = 0;
     }
 }
 
+// touch all pages before writing output
+void Touch_Partitions(){
+    int i, j;
+    // TODO do I need to touch it before each run or only one time before all runs?
+    int v_touched;
+    for(i = 0; i < NUM_PARTITIONS; i++) {
+        // TODO touch every index of every partition is not time-effective.. is the right thing to do?
+        //for(j = 0; j < partition_sz; j++){
+        for(j = 0; j < 1; j++){
+#if (VERBOSE == 2)
+            printf("Touching index %d of partition %d .. value is %ld\n",j,i,partitions[i]->tuples[j].payload);
+#endif
+            v_touched = partitions[i]->tuples[j].payload;
+        }
+    }
+
+}
 
 /* ======== MAIN FUNCTION ======== */
 
 int main(int argc, char *argv[]) {
 
-    int i, j;
+    int i;
 
     printf("************************************************************************************\n");
     printf("Parameters expected are: (t) number of threads (b) hash bits\n");
@@ -276,19 +329,7 @@ int main(int argc, char *argv[]) {
     // allocate thread info
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
-    // touch all pages before writing output
-    // TODO do I need to touch it before each run or only one time before all runs?
-    int v_touched;
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        // TODO touch every index of every partition is not time-effective.. is the right thing to do?
-        //for(j = 0; j < partition_sz; j++){
-        for(j = 0; j < 1; j++){
-#if (VERBOSE == 2)
-            printf("Touching index %d of partition %d .. value is %ld\n",j,i,partitions[i]->tuples[j].payload);
-#endif
-            v_touched = partitions[i]->tuples[j].payload;
-        }
-    }
+    Touch_Partitions();
 
     Collect_Timing_Info();
 
@@ -296,9 +337,8 @@ int main(int argc, char *argv[]) {
 
 #if (VERBOSE == 1)
 
-    int idx;
-
     /*
+    int idx;
     // Exhibit number of elements per partition
     for(i = 0; i < NUM_PARTITIONS; i++) {
         idx = partitions[i]->nxtfree;
