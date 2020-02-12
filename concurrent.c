@@ -8,7 +8,7 @@
 
 /* ======== DEFINITIONS ======== */
 
-#define VERBOSE 0
+#define VERBOSE 1
 #define CARDINALITY 24
 #define TRIALS 8
 #define SLACK 1.5
@@ -53,6 +53,9 @@ partition_t * partitions;
 /* array to store writers */
 pthread_t * writers;
 
+/* number of threads to execute */
+int NUM_THREADS;
+
 /* number of hash bits to be used */
 int HASH_BITS;
 
@@ -62,8 +65,14 @@ int NUM_PARTITIONS;
 /* number of positions in a partition */
 int PARTITION_SIZE;
 
+/* number of values to be generated, based on the cardinality */
+int NUM_VALUES;
+
 /* array that stores thread info for all threads */
 thread_info_t * thread_info_array;
+
+/* store timing information for each trial */
+float RUN[TRIALS];
 
 /* ======== THREAD FUNCTION DECLARATIONS ======== */
 
@@ -74,6 +83,10 @@ void * writer(void *args);
 Tuple * Alloc_Tuples();
 
 partition_t Alloc_Partition();
+
+void Collect_Timing_Info();
+
+void Output_Timing_Result_To_File();
 
 /* ======== FUNCTION IMPLEMENTATION ======== */
 
@@ -87,6 +100,48 @@ partition_t Alloc_Partition() {
     partition->tuples = Alloc_Tuples();
     pthread_mutex_init(&partition->mutex, NULL);
     return partition;
+}
+
+void Collect_Timing_Info(){
+
+    int i, trial;
+
+    for(trial = 1; trial <= TRIALS; trial++){
+
+        int start = 1;
+        int aux = NUM_VALUES / NUM_THREADS;
+        clock_t begin = clock();
+       
+        // create threads; pass by parameter its respective range of values
+        for(i = 1; i <= NUM_THREADS; i++) {
+            thread_info_array[i] = malloc( sizeof(ThreadInfo) );
+            thread_info_array[i]->id = i;
+            thread_info_array[i]->start = start;
+            thread_info_array[i]->end = aux;
+            pthread_create(&(writers[i]), NULL, writer, thread_info_array[i]);
+            start = (aux * i) + 1;
+            aux = aux * (i + 1);
+        }
+
+        for (i = 1; i <= NUM_THREADS; i++) {
+            pthread_join(writers[i], NULL);
+        }
+
+        clock_t end = clock();
+
+        double time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
+
+        RUN[trial] = time_spent;
+#if (VERBOSE == 1)
+        printf("Trial #%d took %f seconds to execute\n", trial, time_spent);
+#endif
+        //printf("It took %f seconds to execute \n", time_spent);
+    }
+
+}
+
+void Output_Timing_Result_To_File(){
+
 }
 
 /* ======== THREAD FUNCTION IMPLEMENTATION ======== */
@@ -123,7 +178,7 @@ void * writer(void *args) {
         tuple->key = key;
         tuple->payload = (uint64_t) i;
 
-#if (VERBOSE == 1)
+#if (VERBOSE == 2)
         printf("Tentative to access partition %d from thread %d\n",partition,id);
 #endif
 
@@ -141,7 +196,7 @@ void * writer(void *args) {
 	    // free
         free(tuple);
 
-#if (VERBOSE == 1)
+#if (VERBOSE == 2)
         printf("Left mutex of partition %d from thread %d\n",partition,id);        
 #endif
     }
@@ -152,8 +207,7 @@ void * writer(void *args) {
 
 int main(int argc, char *argv[]) {
 
-    int i, j, NUM_THREADS, NUM_VALUES;
-    float RUN[TRIALS];
+    int i, j;
 
     printf("************************************************************************************\n");
     printf("Parameters expected are: (t) number of threads (b) hash bits\n");
@@ -191,12 +245,10 @@ int main(int argc, char *argv[]) {
         partitions[i] = Alloc_Partition();
     }
 
-    int start = 1;
-    int aux = NUM_VALUES / NUM_THREADS;
-
     // allocate writers
     writers = (pthread_t *)malloc(NUM_THREADS * sizeof(pthread_t));
 
+    // allocate thread info
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
     // touch all pages before writing output
@@ -204,39 +256,20 @@ int main(int argc, char *argv[]) {
     int v_touched;
     for(i = 0; i < NUM_PARTITIONS; i++) {
         // TODO touch every index of every partition is not time-effective.. is the right thing to do?
-        for(j = 0; j < partition_sz; j++){
-#if (VERBOSE == 1)
+        //for(j = 0; j < partition_sz; j++){
+        for(j = 0; j < 1; j++){
+#if (VERBOSE == 2)
             printf("Touching index %d of partition %d .. value is %ld\n",j,i,partitions[i]->tuples[j].payload);
 #endif
             v_touched = partitions[i]->tuples[j].payload;
         }
     }
 
-    clock_t begin = clock();
-   
-    // create threads; pass by parameter its respective range of values
-    for(i = 1; i <= NUM_THREADS; i++) {
-        thread_info_array[i] = malloc( sizeof(ThreadInfo) );
-        thread_info_array[i]->id = i;
-        thread_info_array[i]->start = start;
-        thread_info_array[i]->end = aux;
-        pthread_create(&(writers[i]), NULL, writer, thread_info_array[i]);
-        start = (aux * i) + 1;
-        aux = aux * (i + 1);
-    }
+    Collect_Timing_Info();
 
-    for (i = 1; i <= NUM_THREADS; i++) {
-        pthread_join(writers[i], NULL);
-    }
+    Output_Timing_Result_To_File();
 
-    clock_t end = clock();
-
-    double time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
-
-    //RUN[trial] = time_spent;
-    printf("It took %f seconds to execute \n", time_spent);
 #if (VERBOSE == 1)
-    printf("It took %f seconds to execute \n", time_spent);
 
     int idx;
 
