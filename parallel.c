@@ -12,6 +12,7 @@
 #define CARDINALITY 24
 #define TRIALS 8
 #define SLACK 1.5
+#define CHUNK_PERC_NUM_VALUES 0.1
 
 /* ======== DEFAULT VARIABLE VALUES ======== */
 
@@ -28,14 +29,15 @@ typedef struct tuple {
 } Tuple;
 // can use `Tuple* tp` instead of `struct tuple* tp`
 
-typedef struct partition {
-    int nxtfree;
+typedef struct chunk {
+    int start_idx;
+    int end_idx;
+    // the thread must keep track of the nxtfree
+    //int nxtfree;
     Tuple* tuples;
-    // TODO change to atomic intrinsics
-    pthread_mutex_t mutex;
-} Partition;
+} Chunk;
 
-typedef Partition * partition_t;
+typedef Chunk * chunk_t;
 
 typedef struct thread_info {
     int id;
@@ -47,8 +49,8 @@ typedef ThreadInfo * thread_info_t;
 
 /* ======== ATTRIBUTE DECLARATIONS ======== */
 
-/* array to store output partitions */
-partition_t * partitions;
+/* array to store chunks */
+chunk_t * chunks;
 
 /* array to store writers */
 pthread_t * writers;
@@ -59,14 +61,17 @@ int NUM_THREADS;
 /* number of hash bits to be used */
 int HASH_BITS;
 
-/* number of partitions */
-int NUM_PARTITIONS;
+/* number of chunks */
+int NUM_CHUNKS;
 
-/* number of positions in a partition */
-int PARTITION_SIZE;
+/* number of tuples in a chunk */
+int NUM_TUPLES_PER_CHUNK;
 
 /* number of values to be generated, based on the cardinality */
 int NUM_VALUES;
+
+/* number of partition ... just to calculate the hash key of the tuple */
+int NUM_PARTITIONS;
 
 /* array that stores thread info for all threads */
 thread_info_t * thread_info_array;
@@ -82,7 +87,7 @@ void * writer(void *args);
 
 Tuple * Alloc_Tuples();
 
-partition_t Alloc_Partition();
+chunk_t Alloc_Chunk();
 
 void Collect_Timing_Info();
 
@@ -90,9 +95,9 @@ void Output_Timing_Result_To_File();
 
 static inline int Hash(uint64_t i);
 
-void Default_Output_Partitions();
+void Default_Chunks();
 
-void Touch_Partitions();
+void Touch_Pages();
 
 /* ======== THREAD FUNCTION IMPLEMENTATION ======== */
 
@@ -128,15 +133,15 @@ void * writer(void *args) {
 #endif
 
         // access partitions
-        pthread_mutex_lock(&partitions[partition]->mutex);
+        //pthread_mutex_lock(&partitions[partition]->mutex);
 
-        nxtfree = partitions[partition]->nxtfree;
+        //nxtfree = partitions[partition]->nxtfree;
 
-        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
+        //memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
 
-        partitions[partition]->nxtfree = nxtfree + 1;
+        //partitions[partition]->nxtfree = nxtfree + 1;
 
-        pthread_mutex_unlock(&partitions[partition]->mutex);
+        //pthread_mutex_unlock(&partitions[partition]->mutex);
 
 	    // free
         free(tuple);
@@ -151,15 +156,14 @@ void * writer(void *args) {
 /* ======== FUNCTION IMPLEMENTATION ======== */
 
 Tuple * Alloc_Tuples() {
-    Tuple* tuples = malloc( PARTITION_SIZE * sizeof(Tuple) );
+    Tuple* tuples = malloc( NUM_TUPLES_PER_CHUNK * sizeof(Tuple) );
     return tuples;
 }
 
-partition_t Alloc_Partition() {
-    partition_t partition = malloc( sizeof(Partition) );
-    partition->tuples = Alloc_Tuples();
-    pthread_mutex_init(&partition->mutex, NULL);
-    return partition;
+chunk_t Alloc_Chunk() {
+    chunk_t chunk = malloc( sizeof(Chunk) );
+    chunk->tuples = Alloc_Tuples();
+    return chunk;
 }
 
 void Collect_Timing_Info(){
@@ -199,7 +203,7 @@ void Collect_Timing_Info(){
 #endif
 
         // set default idx (0) for each partition after a trial to avoid segmentation fault
-        Default_Output_Partitions();
+        Default_Chunks();
 
     }
 
@@ -245,26 +249,26 @@ static inline int Hash(uint64_t i){
     return partition;
 }
 
-void Default_Output_Partitions(){
+void Default_Chunks(){
     int i;
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        partitions[i]->nxtfree = 0;
+    for(i = 0; i < NUM_CHUNKS; i++) {
+        //chunks[i]->nxtfree = 0;
     }
 }
 
 // touch all pages before writing output
-void Touch_Partitions(){
+void Touch_Pages(){
     int i, j;
     // TODO do I need to touch it before each run or only one time before all runs?
     int v_touched;
-    for(i = 0; i < NUM_PARTITIONS; i++) {
+    for(i = 0; i < NUM_CHUNKS; i++) {
         // TODO touch every index of every partition is not time-effective.. is the right thing to do?
         //for(j = 0; j < partition_sz; j++){
         for(j = 0; j < 1; j++){
 #if (VERBOSE == 2)
-            printf("Touching index %d of partition %d .. value is %ld\n",j,i,partitions[i]->tuples[j].payload);
+            printf("Touching index %d of chunk %d .. value is %ld\n",j,i,chunks[i]->tuples[j].payload);
 #endif
-            v_touched = partitions[i]->tuples[j].payload;
+            v_touched = chunks[i]->tuples[j].payload;
         }
     }
 
@@ -296,20 +300,18 @@ int main(int argc, char *argv[]) {
 */
 
     NUM_VALUES = pow(2,CARDINALITY);
+
+    // just to calculate hash key of each tuple
     NUM_PARTITIONS = pow(2,HASH_BITS);
+    
+    NUM_TUPLES_PER_CHUNK = NUM_VALUES * CHUNK_PERC_NUM_VALUES;
 
-    /* if we consider our hash function divides the tuples to partitions evenly,
-     then we can increase 50% the size of the partition in order to not deal
-     with resizing during partitioning process */
-    int partition_sz = (NUM_VALUES / NUM_THREADS);
-    PARTITION_SIZE = partition_sz * SLACK;
+    // alloc array that stores reference to chunks
+    chunks = malloc( NUM_CHUNKS * sizeof(Chunk) * SLACK );
 
-    // alloc array that stores reference to output partitions
-    partitions = malloc( NUM_PARTITIONS * sizeof(Partition) );
-
-    // alloc output partitions
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        partitions[i] = Alloc_Partition();
+    // alloc maximum number of chunks necessary for computation
+    for(i = 0; i < NUM_CHUNKS; i++) {
+        chunks[i] = Alloc_Chunk();
     }
 
     // allocate writers
@@ -318,7 +320,7 @@ int main(int argc, char *argv[]) {
     // allocate thread info
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
-    Touch_Partitions();
+    Touch_Pages();
 
     Collect_Timing_Info();
 
@@ -326,17 +328,9 @@ int main(int argc, char *argv[]) {
 
 #if (VERBOSE == 1)
 
-    
     int idx;
-    // Exhibit number of elements per partition
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        idx = partitions[i]->nxtfree;
-	printf("Accessing partition %d\n",i);
-        printf("Number of elements == %d\n", idx);
-    }    
-   
-    /*
-    // teste para ver o que esta em cada particao
+    /*   
+    // teste para ver o que esta em cada chunk
     for(i = 0; i < NUM_PARTITIONS; i++) {
         printf("Accessing partition %d\n",i);
         idx = partitions[i]->nxtfree;
