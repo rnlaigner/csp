@@ -30,10 +30,7 @@ typedef struct tuple {
 // can use `Tuple* tp` instead of `struct tuple* tp`
 
 typedef struct chunk {
-    int start_idx;
-    int end_idx;
-    // the thread must keep track of the nxtfree
-    //int nxtfree;
+    int nxt_free;
     Tuple* tuples;
 } Chunk;
 
@@ -51,6 +48,9 @@ typedef ThreadInfo * thread_info_t;
 
 /* array to store chunks */
 chunk_t * chunks;
+
+/* next free chunk available */
+int nxt_free_chunk;
 
 /* array to store writers */
 pthread_t * writers;
@@ -72,6 +72,9 @@ int NUM_VALUES;
 
 /* number of partition ... just to calculate the hash key of the tuple */
 int NUM_PARTITIONS;
+
+/* chunk acquiral mutex */
+pthread_mutex_t chunk_acquiral_mutex;
 
 /* array that stores thread info for all threads */
 thread_info_t * thread_info_array;
@@ -103,8 +106,9 @@ void Touch_Pages();
 
 void * writer(void *args) {
     
-    int i, start, end, id, partition, nxtfree;
+    int i, start, end, id, partition, nxt_free;
     uint64_t key, payload;
+    chunk_t my_chunk;
 
     ThreadInfo * info = args;
     start = info->start;
@@ -128,27 +132,21 @@ void * writer(void *args) {
         tuple->key = key;
         tuple->payload = (uint64_t) i;
 
-#if (VERBOSE == 2)
-        printf("Tentative to access partition %d from thread %d\n",partition,id);
-#endif
+        // if I don't have a chunk yet or chunk is full, acquire it
+        if(my_chunk == NULL || my_chunk->nxt_free > NUM_TUPLES_PER_CHUNK){
+            pthread_mutex_lock(&chunk_acquiral_mutex);
+            my_chunk = chunks[nxt_free_chunk];
+            nxt_free_chunk = nxt_free_chunk + 1;
+            pthread_mutex_unlock(&chunk_acquiral_mutex);
+        }
 
-        // access partitions
-        //pthread_mutex_lock(&partitions[partition]->mutex);
-
-        //nxtfree = partitions[partition]->nxtfree;
-
-        //memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
-
-        //partitions[partition]->nxtfree = nxtfree + 1;
-
-        //pthread_mutex_unlock(&partitions[partition]->mutex);
+        nxt_free = my_chunk->nxt_free;
+        memcpy( &(my_chunk->tuples[nxt_free]), tuple, sizeof(Tuple) );
+        my_chunk->nxt_free = nxt_free + 1;
 
 	    // free
         free(tuple);
 
-#if (VERBOSE == 2)
-        printf("Left mutex of partition %d from thread %d\n",partition,id);        
-#endif
     }
     
 }
@@ -308,6 +306,8 @@ int main(int argc, char *argv[]) {
 
     // alloc array that stores reference to chunks
     chunks = malloc( NUM_CHUNKS * sizeof(Chunk) * SLACK );
+
+    nxt_free_chunk = 0;
 
     // alloc maximum number of chunks necessary for computation
     for(i = 0; i < NUM_CHUNKS; i++) {
