@@ -8,11 +8,10 @@
 
 /* ======== DEFINITIONS ======== */
 
-#define VERBOSE 1
+#define VERBOSE 0
 #define CARDINALITY 24
-#define TRIALS 8
 #define SLACK 1.5
-#define CHUNK_PERC_NUM_VALUES 0.1
+#define CHUNK_PERC_PER_NUM_VALUES 0.1
 
 /* ======== DEFAULT VARIABLE VALUES ======== */
 
@@ -80,7 +79,10 @@ pthread_mutex_t chunk_acquiral_mutex;
 thread_info_t * thread_info_array;
 
 /* store timing information for each trial */
-float RUN[TRIALS];
+float * RUN;
+
+/* store number of trials of the experiment */
+int TRIALS;
 
 /* ======== THREAD FUNCTION DECLARATIONS ======== */
 
@@ -102,6 +104,10 @@ void Default_Chunks();
 
 void Touch_Pages();
 
+void Process_Input_And_Perform_Memory_Allocs(int argc, char *argv[]);
+
+void Print_Output();
+
 /* ======== THREAD FUNCTION IMPLEMENTATION ======== */
 
 void * writer(void *args) {
@@ -118,6 +124,13 @@ void * writer(void *args) {
 #if (VERBOSE == 1)
     printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
 #endif
+
+    pthread_mutex_lock(&chunk_acquiral_mutex);
+    my_chunk = chunks[nxt_free_chunk];
+    nxt_free_chunk = nxt_free_chunk + 1;
+    pthread_mutex_unlock(&chunk_acquiral_mutex);
+
+    // printf("Chunk acquired!\n");
 	
     // For each value, mount the tuple and assigns it to given partition
     for (i = start; i <= end; i++) {
@@ -131,20 +144,30 @@ void * writer(void *args) {
         Tuple* tuple = malloc( sizeof(Tuple) );
         tuple->key = key;
         tuple->payload = (uint64_t) i;
+        
+    /*
+        printf("Tuple mounted\n");
 
-        // if I don't have a chunk yet or chunk is full, acquire it
-        if(my_chunk == NULL || my_chunk->nxt_free > NUM_TUPLES_PER_CHUNK){
+        printf("num_tuples_per_chunk %d\n",NUM_TUPLES_PER_CHUNK);
+
+        printf("Check if my_chunk is full... nxt_free is %d\n",my_chunk->nxt_free);
+
+        printf("Check if my_chunk is full... nxt_free is %d num_tuples_per_chunk %d\n",my_chunk->nxt_free,NUM_TUPLES_PER_CHUNK);
+    */
+
+        // chunk is full, acquire another
+        if(my_chunk->nxt_free > NUM_TUPLES_PER_CHUNK){
             pthread_mutex_lock(&chunk_acquiral_mutex);
             my_chunk = chunks[nxt_free_chunk];
             nxt_free_chunk = nxt_free_chunk + 1;
-            pthread_mutex_unlock(&chunk_acquiral_mutex);
-        }
+            pthread_mutex_unlock(&chunk_acquiral_mutex);            
+        }        
 
         nxt_free = my_chunk->nxt_free;
         memcpy( &(my_chunk->tuples[nxt_free]), tuple, sizeof(Tuple) );
         my_chunk->nxt_free = nxt_free + 1;
 
-	    // free
+        // free
         free(tuple);
 
     }
@@ -161,6 +184,7 @@ Tuple * Alloc_Tuples() {
 chunk_t Alloc_Chunk() {
     chunk_t chunk = malloc( sizeof(Chunk) );
     chunk->tuples = Alloc_Tuples();
+    chunk->nxt_free = 0;
     return chunk;
 }
 
@@ -196,11 +220,12 @@ void Collect_Timing_Info(){
         time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
 
         RUN[trial] = time_spent;
+
 #if (VERBOSE == 1)
         printf("Trial #%d took %f seconds to execute\n", trial, time_spent);
 #endif
 
-        // set default idx (0) for each partition after a trial to avoid segmentation fault
+        // set default idx (0) for each chunk after a trial
         Default_Chunks();
 
     }
@@ -250,7 +275,7 @@ static inline int Hash(uint64_t i){
 void Default_Chunks(){
     int i;
     for(i = 0; i < NUM_CHUNKS; i++) {
-        //chunks[i]->nxtfree = 0;
+        chunks[i]->nxt_free = 0;
     }
 }
 
@@ -272,37 +297,45 @@ void Touch_Pages(){
 
 }
 
-/* ======== MAIN FUNCTION ======== */
-
-int main(int argc, char *argv[]) {
+void Process_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
 
     int i;
 
     printf("************************************************************************************\n");
-    printf("Parameters expected are: (t) number of threads (b) hash bits\n");
+    printf("Parameters expected are: (t) number of threads (b) hash bits (c) number of trials\n");
 
-    if(argc == 1) {
+    // 3 arguments + number of arguments
+    if(argc < 4) {
+        printf("Number of arguments received are %d",argc);
         fprintf(stderr, "ERROR: Cannot proceed without proper input\n");
         exit(0);
     }
 
-    printf("Parameters received are: %s and %s\n", argv[1], argv[2]);
+    printf("Parameters received are: %s, %s, and %s\n", argv[1], argv[2], argv[3]);
 
     NUM_THREADS = atoi(argv[1]);
     HASH_BITS = atoi(argv[2]);
+    TRIALS = atoi(argv[3]);
 
 // DEFAULT VALUES FOR TESTING PURPOSES
 /*
     NUM_THREADS = 2;
     HASH_BITS = 3;
+    TRIALS = 1;
 */
+
+    RUN = malloc( TRIALS * sizeof(float) );
 
     NUM_VALUES = pow(2,CARDINALITY);
 
     // just to calculate hash key of each tuple
     NUM_PARTITIONS = pow(2,HASH_BITS);
     
-    NUM_TUPLES_PER_CHUNK = NUM_VALUES * CHUNK_PERC_NUM_VALUES;
+    // set number of tuples per chunk given a threashold (chunk percentage per number of values)
+    NUM_TUPLES_PER_CHUNK = NUM_VALUES * CHUNK_PERC_PER_NUM_VALUES;
+
+    // set number of chunks
+    NUM_CHUNKS = NUM_VALUES / NUM_TUPLES_PER_CHUNK;
 
     // alloc array that stores reference to chunks
     chunks = malloc( NUM_CHUNKS * sizeof(Chunk) * SLACK );
@@ -320,6 +353,29 @@ int main(int argc, char *argv[]) {
     // allocate thread info
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
+    // init mutex
+    pthread_mutex_init(&chunk_acquiral_mutex, NULL);
+
+}
+
+void Print_Output(){
+
+    int i, j, idx;
+    for(i = 0; i < NUM_CHUNKS; i++) {
+        printf("Accessing chunk %d\n",i);
+        for(j = 0; j < NUM_TUPLES_PER_CHUNK; j++){
+            printf("Tuple idx %d value %ld\n",j,chunks[i]->tuples[j].payload);
+        }
+    }
+
+}
+
+/* ======== MAIN FUNCTION ======== */
+
+int main(int argc, char *argv[]) {
+
+    Process_Input_And_Perform_Memory_Allocs(argc, argv);
+
     Touch_Pages();
 
     Collect_Timing_Info();
@@ -327,19 +383,7 @@ int main(int argc, char *argv[]) {
     Output_Timing_Result_To_File();
 
 #if (VERBOSE == 1)
-
-    int idx;
-    /*   
-    // teste para ver o que esta em cada chunk
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        printf("Accessing partition %d\n",i);
-        idx = partitions[i]->nxtfree;
-        for(j = idx - 1; j>= 0; j--){
-            printf("Tuple idx %d value %ld\n",j,partitions[i]->tuples[j].payload);
-        }
-    }
-    */
-    
+    Print_Output();
 #endif
 
     return 0;
