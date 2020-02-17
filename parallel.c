@@ -9,7 +9,7 @@
 /* ======== DEFINITIONS ======== */
 
 #define VERBOSE 1
-#define CARDINALITY 3
+#define CARDINALITY 4
 #define SLACK 1.5
 #define CHUNK_PERC_PER_NUM_VALUES 0.1
 #define PRE_PROCESS_INPUT 1
@@ -141,31 +141,22 @@ void * writer(void *args) {
         key = i & HASH_BITS;
         tuple = malloc( sizeof(Tuple) );
         tuple->key = key;
-        tuple->payload = i;// (uint64_t) i;
+        tuple->payload = (uint64_t) i;
 #else
-        printf("Thread %d here using pre procesed input in index %d\n",id, i);
         tuple = &input[i];
-        printf("Tuple acquired from input by thread %d\n",id);
 #endif
-
-        
 
         // chunk is full, acquire another
         if(my_chunk->nxt_free >= NUM_TUPLES_PER_CHUNK){
             Acquire_Chunk(&my_chunk);
         }
-
         nxt_free = my_chunk->nxt_free;
-
-        printf("I am thread %d writing to idx %d the payload %d\n",id,nxt_free,i);
-
         memcpy( &(my_chunk->tuples[nxt_free]), tuple, sizeof(Tuple) );
         my_chunk->nxt_free = nxt_free + 1;
 
 #if(PRE_PROCESS_INPUT == 0)
         free(tuple);
 #endif
-
     }
     
 }
@@ -173,7 +164,6 @@ void * writer(void *args) {
 /* ======== FUNCTION IMPLEMENTATION ======== */
 
 void Process_Input(){
-    printf("Process input\n");
     int i;
     uint64_t key;
     Tuple * tuple;
@@ -208,9 +198,6 @@ chunk_t Alloc_Chunk() {
 }
 
 void Collect_Timing_Info(){
-
-    printf("Collect time info\n");
-
     int i, trial;
     double time_spent;
     clock_t begin, end;
@@ -309,7 +296,7 @@ void Touch_Pages(){
 #if (VERBOSE == 1)
             printf("Touching index %d of chunk %d .. value is %ld\n",j,i,chunks[i]->tuples[j].payload);
 #endif
-            //v_touched = chunks[i]->tuples[j].payload;
+            v_touched = chunks[i]->tuples[j].payload;
         }
     }
 
@@ -336,31 +323,28 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
     TRIALS = atoi(argv[3]);
 
     if(NUM_THREADS % 2 > 0){
-        fprintf(stderr, "ERROR: Cannot accept an ood number of threads\n");
+        fprintf(stderr, "ERROR: Cannot accept an odd number of threads\n");
         exit(0);
     }
 
     run = malloc( TRIALS * sizeof(float) );
 
-    //printf("Run allocated\n");
-
     NUM_VALUES = pow(2,CARDINALITY);
 
-    //printf("NUMVALUES == %d\n",NUM_VALUES);
+    if(NUM_VALUES < NUM_THREADS || (NUM_VALUES % NUM_THREADS > 0 )){
+        fprintf(stderr, "ERROR: Cannot accept number of threads provided (< NUM_VALUES or can't be evenly distributed)\n");
+        exit(0);
+    }
+
+    printf("NUM_VALUES == %d\n",NUM_VALUES);
     
     // set number of tuples per chunk given a threashold (chunk percentage per number of values)
     NUM_TUPLES_PER_CHUNK = ceil(NUM_VALUES * CHUNK_PERC_PER_NUM_VALUES);
 
-    //printf("NUMTUPLESPERCHUNK == %d\n",NUM_TUPLES_PER_CHUNK);
-
     // set number of chunks
     NUM_CHUNKS = NUM_VALUES / NUM_TUPLES_PER_CHUNK;
 
-    //printf("NUM_CHUNKS == %d\n",NUM_CHUNKS);
-
     int NUM_CHUNKS_WITH_SLACK = NUM_CHUNKS * SLACK;
-
-    //printf("Num chunks with slack == %d\n",NUM_CHUNKS_WITH_SLACK);
 
     // alloc array that stores reference to chunks
     chunks = malloc( NUM_CHUNKS_WITH_SLACK * sizeof(Chunk) );
@@ -384,8 +368,6 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
 #if(PRE_PROCESS_INPUT == 1)
     input = malloc( NUM_VALUES * sizeof(Tuple) );
 #endif
-
-    printf("Finished parse input and alloc\n");
 
 }
 
