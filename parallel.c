@@ -8,7 +8,7 @@
 
 /* ======== DEFINITIONS ======== */
 
-#define VERBOSE 0
+#define VERBOSE 1
 #define CARDINALITY 24
 #define SLACK 1.5
 #define CHUNK_PERC_PER_NUM_VALUES 0.1
@@ -90,6 +90,8 @@ void * writer(void *args);
 
 /* ======== FUNCTION DECLARATIONS ======== */
 
+void Acquire_Chunk(chunk_t * my_chunk);
+
 Tuple * Alloc_Tuples();
 
 chunk_t Alloc_Chunk();
@@ -111,10 +113,17 @@ void Print_Output();
 /* ======== THREAD FUNCTION IMPLEMENTATION ======== */
 
 void * writer(void *args) {
+
+    printf("Writer called!");
     
     int i, start, end, id, partition, nxt_free;
     uint64_t key, payload;
     chunk_t my_chunk;
+
+    if(args == NULL){
+        fprintf(stderr, "ERROR: Cannot create thread without information passed as argument\n");
+        exit(0); 
+    }
 
     ThreadInfo * info = args;
     start = info->start;
@@ -125,15 +134,12 @@ void * writer(void *args) {
     printf("Creating writer with id %d; start == %d end == %d\n", id, start, end);
 #endif
 
-    pthread_mutex_lock(&chunk_acquiral_mutex);
-    my_chunk = chunks[nxt_free_chunk];
-    nxt_free_chunk = nxt_free_chunk + 1;
-    pthread_mutex_unlock(&chunk_acquiral_mutex);
+    Acquire_Chunk(&my_chunk);
 
-    // printf("Chunk acquired!\n");
+    printf("Chunk acquired!");
 	
     // For each value, mount the tuple and assigns it to given partition
-    for (i = start; i <= end; i++) {
+    for (i = start; i < end; i++) {
         
         // get last bits
         key = i & HASH_BITS;
@@ -144,23 +150,12 @@ void * writer(void *args) {
         Tuple* tuple = malloc( sizeof(Tuple) );
         tuple->key = key;
         tuple->payload = (uint64_t) i;
-        
-    /*
-        printf("Tuple mounted\n");
 
-        printf("num_tuples_per_chunk %d\n",NUM_TUPLES_PER_CHUNK);
-
-        printf("Check if my_chunk is full... nxt_free is %d\n",my_chunk->nxt_free);
-
-        printf("Check if my_chunk is full... nxt_free is %d num_tuples_per_chunk %d\n",my_chunk->nxt_free,NUM_TUPLES_PER_CHUNK);
-    */
+        //printf("Checking if chunk is full for thread %d\n",id);
 
         // chunk is full, acquire another
         if(my_chunk->nxt_free > NUM_TUPLES_PER_CHUNK){
-            pthread_mutex_lock(&chunk_acquiral_mutex);
-            my_chunk = chunks[nxt_free_chunk];
-            nxt_free_chunk = nxt_free_chunk + 1;
-            pthread_mutex_unlock(&chunk_acquiral_mutex);            
+            Acquire_Chunk(&my_chunk);
         }        
 
         nxt_free = my_chunk->nxt_free;
@@ -176,6 +171,14 @@ void * writer(void *args) {
 
 /* ======== FUNCTION IMPLEMENTATION ======== */
 
+void Acquire_Chunk(chunk_t * my_chunk){
+    pthread_mutex_lock(&chunk_acquiral_mutex);
+    *my_chunk = (chunks[nxt_free_chunk]);
+//    my_chunk = *(chunks[nxt_free_chunk]);
+    nxt_free_chunk = nxt_free_chunk + 1;
+    pthread_mutex_unlock(&chunk_acquiral_mutex);
+}
+
 Tuple * Alloc_Tuples() {
     Tuple* tuples = malloc( NUM_TUPLES_PER_CHUNK * sizeof(Tuple) );
     return tuples;
@@ -190,28 +193,56 @@ chunk_t Alloc_Chunk() {
 
 void Collect_Timing_Info(){
 
+    printf("Entered collect timing info\n");
+
     int i, trial;
     double time_spent;
     clock_t begin, end;
 
+    int start, aux;
+
     for(trial = 0; trial < TRIALS; trial++){
 
-        int start = 1;
-        int aux = NUM_VALUES / NUM_THREADS;
+        printf("TRial %d\n",trial);
+
+        start = 0;
+        aux = NUM_VALUES / NUM_THREADS;
+
+//        printf("start == %d aux == %d\n",start,aux);
+
         begin = clock();
+
+        printf("entering for llooop\n");
        
         // create threads; pass by parameter its respective range of values
-        for(i = 1; i <= NUM_THREADS; i++) {
+        for(i = 0; i < NUM_THREADS; i++) {
+
+            printf("loop index %d\n",i);            
+
+            printf("start == %d aux == %d for thread %d\n",start,aux, i);
+
             thread_info_array[i] = malloc( sizeof(ThreadInfo) );
             thread_info_array[i]->id = i;
             thread_info_array[i]->start = start;
             thread_info_array[i]->end = aux;
-            pthread_create(&(writers[i]), NULL, writer, thread_info_array[i]);
-            start = (aux * i) + 1;
-            aux = aux * (i + 1);
+
+            printf("thread info array created!\n");
+
+            if(pthread_create( &(writers[i]), NULL, writer, thread_info_array[i]) != 0) {
+                fprintf(stderr, "ERROR: Cannot create thread # %d\n", i);
+                exit(0);
+            }
+
+            printf("thread created!\n");
+
+            start = (aux * ( i + 1 ) ) + 1;
+            aux = aux * (i + 2);
+
+
+    
         }
 
-        for (i = 1; i <= NUM_THREADS; i++) {
+        for (i = 0; i < NUM_THREADS; i++) {
             pthread_join(writers[i], NULL);
         }
 
@@ -348,6 +379,9 @@ void Process_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
     }
 
     // allocate writers
+
+    printf("NUM_THREADS is %d\n",NUM_THREADS);
+
     writers = (pthread_t *)malloc(NUM_THREADS * sizeof(pthread_t));
 
     // allocate thread info
