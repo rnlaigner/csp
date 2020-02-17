@@ -12,7 +12,7 @@
 #define CARDINALITY 3
 #define SLACK 1.5
 #define CHUNK_PERC_PER_NUM_VALUES 0.1
-#define PRE_PROCESS_INPUT 0
+#define PRE_PROCESS_INPUT 1
 
 /* ======== STRUCT DEFINITIONS ======== */
 
@@ -143,14 +143,17 @@ void * writer(void *args) {
         tuple->key = key;
         tuple->payload = i;// (uint64_t) i;
 #else
-        printf("I entered in a area prohibited!\n");
-        *tuple = input[i];
+        printf("Thread %d here using pre procesed input in index %d\n",id, i);
+        tuple = &input[i];
+        printf("Tuple acquired from input by thread %d\n",id);
 #endif
+
+        
 
         // chunk is full, acquire another
         if(my_chunk->nxt_free >= NUM_TUPLES_PER_CHUNK){
             Acquire_Chunk(&my_chunk);
-        }        
+        }
 
         nxt_free = my_chunk->nxt_free;
 
@@ -348,7 +351,7 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
     // set number of tuples per chunk given a threashold (chunk percentage per number of values)
     NUM_TUPLES_PER_CHUNK = ceil(NUM_VALUES * CHUNK_PERC_PER_NUM_VALUES);
 
-    printf("NUMTUPLESPERCHUNK == %d\n",NUM_TUPLES_PER_CHUNK);
+    //printf("NUMTUPLESPERCHUNK == %d\n",NUM_TUPLES_PER_CHUNK);
 
     // set number of chunks
     NUM_CHUNKS = NUM_VALUES / NUM_TUPLES_PER_CHUNK;
@@ -377,6 +380,10 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
 
     // init mutex
     pthread_mutex_init(&chunk_acquiral_mutex, NULL);
+
+#if(PRE_PROCESS_INPUT == 1)
+    input = malloc( NUM_VALUES * sizeof(Tuple) );
+#endif
 
     printf("Finished parse input and alloc\n");
 
