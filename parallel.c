@@ -25,8 +25,10 @@ typedef struct tuple {
 // can use `Tuple* tp` instead of `struct tuple* tp`
 
 typedef struct chunk {
+    // next free position
     int nxt_free;
-    Tuple * tuples;
+    // number of used tuples in the chunk
+    int used;
 } Chunk;
 
 typedef Chunk * chunk_t;
@@ -46,6 +48,9 @@ Tuple * input;
 
 /* array to store chunks */
 chunk_t * chunks;
+
+/* shared buffer of tuples */
+Tuple * buffer;
 
 /* next free chunk available */
 int nxt_free_chunk;
@@ -90,9 +95,7 @@ void Process_Input();
 
 void Acquire_Chunk(chunk_t * my_chunk);
 
-Tuple * Alloc_Tuples();
-
-chunk_t Alloc_Chunk();
+chunk_t Alloc_Chunk(int chunk_idx);
 
 void Collect_Timing_Info();
 
@@ -132,7 +135,11 @@ void * writer(void *args) {
 #endif
 
     Acquire_Chunk(&my_chunk);
-	
+
+#if (VERBOSE == 1)
+    printf("Chunk acquired by thread %d\n",id);
+#endif	
+
     // For each value, mount the tuple and assigns it to the given partition
     for (i = start; i <= end; i++) {
         
@@ -147,12 +154,16 @@ void * writer(void *args) {
 #endif
 
         // chunk is full, acquire another
-        if(my_chunk->nxt_free >= NUM_TUPLES_PER_CHUNK){
+        if(my_chunk->used >= NUM_TUPLES_PER_CHUNK){
             Acquire_Chunk(&my_chunk);
+#if (VERBOSE == 1)
+            printf("Chunk acquired by thread %d\n",id);
+#endif	          
         }
         nxt_free = my_chunk->nxt_free;
-        memcpy( &(my_chunk->tuples[nxt_free]), tuple, sizeof(Tuple) );
+        memcpy( &(buffer[nxt_free]), tuple, sizeof(Tuple) );
         my_chunk->nxt_free = nxt_free + 1;
+        my_chunk->used++;
 
 #if(PRE_PROCESS_INPUT == 0)
         free(tuple);
@@ -185,15 +196,13 @@ void Acquire_Chunk(chunk_t * my_chunk){
     pthread_mutex_unlock(&chunk_acquiral_mutex);
 }
 
-Tuple * Alloc_Tuples() {
-    Tuple* tuples = malloc( NUM_TUPLES_PER_CHUNK * sizeof(Tuple) );
-    return tuples;
-}
-
-chunk_t Alloc_Chunk() {
+chunk_t Alloc_Chunk( int chunk_idx ) {
     chunk_t chunk = malloc( sizeof(Chunk) );
-    chunk->tuples = Alloc_Tuples();
-    chunk->nxt_free = 0;
+    chunk->nxt_free = chunk_idx * NUM_TUPLES_PER_CHUNK;
+#if (VERBOSE == 1)
+    printf("Chunk %d next free is %d\n",chunk_idx,chunk->nxt_free);
+#endif
+    chunk->used = 0;
     return chunk;
 }
 
@@ -286,18 +295,14 @@ void Default_Chunks(){
 
 // touch all pages before writing output
 void Touch_Pages(){
-    int i, j;
+    int i;
     // TODO do I need to touch it before each run or only one time before all runs?
     int v_touched;
-    for(i = 0; i < NUM_CHUNKS; i++) {
-        // TODO touch every index of every partition is not time-effective.. is the right thing to do?
-        //for(j = 0; j < partition_sz; j++){
-        for(j = 0; j < NUM_TUPLES_PER_CHUNK; j++){
+    for(i = 0; i < NUM_VALUES; i++) {
 #if (VERBOSE == 1)
-            printf("Touching index %d of chunk %d .. value is %ld\n",j,i,chunks[i]->tuples[j].payload);
+        printf("Touching index %d shared buffer .. value is %ld\n",i,buffer[i].payload);
 #endif
-            v_touched = chunks[i]->tuples[j].payload;
-        }
+        v_touched = buffer[i].payload;
     }
 
 }
@@ -335,8 +340,6 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
         fprintf(stderr, "ERROR: Cannot accept number of threads provided (< NUM_VALUES or can't be evenly distributed)\n");
         exit(0);
     }
-
-    printf("NUM_VALUES == %d\n",NUM_VALUES);
     
     // set number of tuples per chunk given a threashold (chunk percentage per number of values)
     NUM_TUPLES_PER_CHUNK = ceil(NUM_VALUES * CHUNK_PERC_PER_NUM_VALUES);
@@ -353,8 +356,11 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
 
     // alloc maximum number of chunks necessary for computation
     for(i = 0; i < NUM_CHUNKS_WITH_SLACK; i++) {
-        chunks[i] = Alloc_Chunk();
+        chunks[i] = Alloc_Chunk(i);
     }
+
+    // allocate shared buffer
+    buffer = malloc( NUM_VALUES * sizeof(Tuple) );
 
     // allocate writers
     writers = (pthread_t *)malloc(NUM_THREADS * sizeof(pthread_t));
@@ -373,12 +379,9 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
 
 void Print_Output(){
 
-    int i, j, idx;
-    for(i = 0; i < NUM_CHUNKS; i++) {
-        printf("Accessing chunk %d\n",i);
-        for(j = 0; j < NUM_TUPLES_PER_CHUNK; j++){
-            printf("Tuple idx %d value %ld\n",j,chunks[i]->tuples[j].payload);
-        }
+    int i;
+    for(i = 0; i < NUM_VALUES; i++) {
+        printf("Tuple idx %d value %ld\n",i,buffer[i].payload);
     }
 
 }
