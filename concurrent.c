@@ -9,8 +9,7 @@
 /* ======== DEFINITIONS ======== */
 
 #define VERBOSE 1
-#define CARDINALITY 24
-#define TRIALS 8
+#define CARDINALITY 4
 #define SLACK 1.5
 
 /* ======== DEFAULT VARIABLE VALUES ======== */
@@ -47,6 +46,9 @@ typedef ThreadInfo * thread_info_t;
 
 /* ======== ATTRIBUTE DECLARATIONS ======== */
 
+/* input array of tuples */
+Tuple * input;
+
 /* array to store output partitions */
 partition_t * partitions;
 
@@ -72,13 +74,18 @@ int NUM_VALUES;
 thread_info_t * thread_info_array;
 
 /* store timing information for each trial */
-float RUN[TRIALS];
+float * run;
+
+/* store number of trials of the experiment */
+int TRIALS;
 
 /* ======== THREAD FUNCTION DECLARATIONS ======== */
 
 void * writer(void *args);
 
 /* ======== FUNCTION DECLARATIONS ======== */
+
+void Process_Input();
 
 Tuple * Alloc_Tuples();
 
@@ -94,12 +101,21 @@ void Default_Output_Partitions();
 
 void Touch_Partitions();
 
+void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]);
+
+void Print_Output();
+
 /* ======== THREAD FUNCTION IMPLEMENTATION ======== */
 
 void * writer(void *args) {
     
     int i, start, end, id, partition, nxtfree;
-    uint64_t key, payload;
+    Tuple * tuple;
+
+    if(args == NULL){
+        fprintf(stderr, "ERROR: Cannot create thread without information passed as argument\n");
+        exit(0); 
+    }
 
     ThreadInfo * info = args;
     start = info->start;
@@ -113,19 +129,10 @@ void * writer(void *args) {
     // For each value, mount the tuple and assigns it to given partition
     for (i = start; i <= end; i++) {
         
-        // get last bits
-        key = i & HASH_BITS;
-        //partition = Hash(key);
-        partition = key % NUM_PARTITIONS;
+        tuple = &input[i];
 
-        // build tuple
-        Tuple* tuple = malloc( sizeof(Tuple) );
-        tuple->key = key;
-        tuple->payload = (uint64_t) i;
-
-#if (VERBOSE == 2)
-        printf("Tentative to access partition %d from thread %d\n",partition,id);
-#endif
+        //partition = tuple->key % NUM_PARTITIONS;
+        partition = Hash(i);
 
         // access partitions
         pthread_mutex_lock(&partitions[partition]->mutex);
@@ -138,17 +145,31 @@ void * writer(void *args) {
 
         pthread_mutex_unlock(&partitions[partition]->mutex);
 
-	    // free
-        free(tuple);
-
-#if (VERBOSE == 2)
-        printf("Left mutex of partition %d from thread %d\n",partition,id);        
-#endif
     }
     
 }
 
 /* ======== FUNCTION IMPLEMENTATION ======== */
+
+void Process_Input(){
+    int i;
+    uint64_t key;
+    Tuple * tuple;
+    for(i = 0; i < NUM_VALUES;i++){
+        // get last bits
+        key = i & HASH_BITS;        
+
+#if(VERBOSE == 1)
+        printf("Value %d, hash %ld\n",i,key);
+#endif
+        tuple = malloc( sizeof(Tuple) );
+        tuple->key = key;
+        // it could also be a random number
+        tuple->payload = (uint64_t) i;
+        memcpy( &(input[i]), tuple, sizeof(Tuple) );
+        free(tuple);
+    }
+}
 
 Tuple * Alloc_Tuples() {
     Tuple* tuples = malloc( PARTITION_SIZE * sizeof(Tuple) );
@@ -163,29 +184,36 @@ partition_t Alloc_Partition() {
 }
 
 void Collect_Timing_Info(){
-
     int i, trial;
     double time_spent;
     clock_t begin, end;
+    int local_a, local_b;
+    int start = 0;
+    int aux = (NUM_VALUES / NUM_THREADS);
 
     for(trial = 0; trial < TRIALS; trial++){
 
-        int start = 1;
-        int aux = NUM_VALUES / NUM_THREADS;
         begin = clock();
        
-        // create threads; pass by parameter its respective range of values
-        for(i = 1; i <= NUM_THREADS; i++) {
+        // create threads; pass by parameter its respective range of indexes
+        for(i = 0; i < NUM_THREADS; i++){
+
+            local_a = start + ((aux * (i+1)) - aux);     
+            local_b = local_a + aux - 1;
+    
             thread_info_array[i] = malloc( sizeof(ThreadInfo) );
             thread_info_array[i]->id = i;
-            thread_info_array[i]->start = start;
-            thread_info_array[i]->end = aux;
-            pthread_create(&(writers[i]), NULL, writer, thread_info_array[i]);
-            start = (aux * i) + 1;
-            aux = aux * (i + 1);
+            thread_info_array[i]->start = local_a;
+            thread_info_array[i]->end = local_b;
+
+            if(pthread_create( &(writers[i]), NULL, writer, thread_info_array[i]) != 0) {
+                fprintf(stderr, "ERROR: Cannot create thread # %d\n", i);
+                exit(0);
+            }
+
         }
 
-        for (i = 1; i <= NUM_THREADS; i++) {
+        for (i = 0; i < NUM_THREADS; i++) {
             pthread_join(writers[i], NULL);
         }
 
@@ -193,7 +221,7 @@ void Collect_Timing_Info(){
 
         time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
 
-        RUN[trial] = time_spent;
+        run[trial] = time_spent;
 #if (VERBOSE == 1)
         printf("Trial #%d took %f seconds to execute\n", trial, time_spent);
 #endif
@@ -224,7 +252,7 @@ void Output_Timing_Result_To_File(){
     sum = 0.0;
 
     for(trial = 0; trial < TRIALS; trial++){
-        sum = sum + RUN[trial];
+        sum = sum + run[trial];
     }
 
     avg = sum / TRIALS;
@@ -234,7 +262,7 @@ void Output_Timing_Result_To_File(){
 
 }
 
-// instructs the compiler to embed the function
+// static inline instructs the compiler to embed the function in the caller function
 static inline int Hash(uint64_t i){
     double s, x;
     // hash calc by multiplication method
@@ -261,7 +289,7 @@ void Touch_Partitions(){
         // TODO touch every index of every partition is not time-effective.. is the right thing to do?
         //for(j = 0; j < partition_sz; j++){
         for(j = 0; j < 1; j++){
-#if (VERBOSE == 2)
+#if(VERBOSE == 1)
             printf("Touching index %d of partition %d .. value is %ld\n",j,i,partitions[i]->tuples[j].payload);
 #endif
             v_touched = partitions[i]->tuples[j].payload;
@@ -270,30 +298,32 @@ void Touch_Partitions(){
 
 }
 
-/* ======== MAIN FUNCTION ======== */
-
-int main(int argc, char *argv[]) {
+void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
 
     int i;
 
     printf("************************************************************************************\n");
-    printf("Parameters expected are: (t) number of threads (b) hash bits\n");
+    printf("Parameters expected are: (t) number of threads (b) hash bits (c) number of trials\n");
 
-    if(argc == 1) {
+    // 3 arguments + number of arguments
+    if(argc < 4) {
+        printf("Number of arguments received are %d",argc);
         fprintf(stderr, "ERROR: Cannot proceed without proper input\n");
         exit(0);
     }
 
-    printf("Parameters received are: %s and %s\n", argv[1], argv[2]);
+    printf("Parameters received are: %s, %s, and %s\n", argv[1], argv[2], argv[3]);
 
     NUM_THREADS = atoi(argv[1]);
     HASH_BITS = atoi(argv[2]);
+    TRIALS = atoi(argv[3]);
 
-// DEFAULT VALUES FOR TESTING PURPOSES
-/*
-    NUM_THREADS = 2;
-    HASH_BITS = 3;
-*/
+    if(NUM_THREADS % 2 > 0){
+        fprintf(stderr, "ERROR: Cannot accept an odd number of threads\n");
+        exit(0);
+    }
+
+    run = malloc( TRIALS * sizeof(float) );
 
     NUM_VALUES = pow(2,CARDINALITY);
     NUM_PARTITIONS = pow(2,HASH_BITS);
@@ -318,6 +348,46 @@ int main(int argc, char *argv[]) {
     // allocate thread info
     thread_info_array = malloc(NUM_THREADS * sizeof(ThreadInfo));
 
+    // allocate input buffer
+    input = malloc( NUM_VALUES * sizeof(Tuple) );
+
+}
+
+void Print_Output(){
+
+    int i, j, idx;
+    // Exhibit number of elements per partition
+    for(i = 0; i < NUM_PARTITIONS; i++) {
+        idx = partitions[i]->nxtfree;
+	    printf("Accessing partition %d\n",i);
+        printf("Number of elements == %d\n", idx);
+    }    
+   
+    // teste para ver o que esta em cada particao
+    for(i = 0; i < NUM_PARTITIONS; i++) {
+        printf("Accessing partition %d\n",i);
+        for(j = 0; j < PARTITION_SIZE; j++){
+            printf("Tuple idx %d value %ld\n",j,partitions[i]->tuples[j].payload);
+        }
+    }
+
+}
+
+void Disalloc(){
+    
+    // TODO iterate through partitions and input
+    // free(tuple) free(&input[i])
+    
+}
+
+/* ======== MAIN FUNCTION ======== */
+
+int main(int argc, char *argv[]) {
+
+    Parse_Input_And_Perform_Memory_Allocs(argc, argv);
+
+    Process_Input();
+
     Touch_Partitions();
 
     Collect_Timing_Info();
@@ -325,27 +395,7 @@ int main(int argc, char *argv[]) {
     Output_Timing_Result_To_File();
 
 #if (VERBOSE == 1)
-
-    
-    int idx;
-    // Exhibit number of elements per partition
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        idx = partitions[i]->nxtfree;
-	printf("Accessing partition %d\n",i);
-        printf("Number of elements == %d\n", idx);
-    }    
-   
-    /*
-    // teste para ver o que esta em cada particao
-    for(i = 0; i < NUM_PARTITIONS; i++) {
-        printf("Accessing partition %d\n",i);
-        idx = partitions[i]->nxtfree;
-        for(j = idx - 1; j>= 0; j--){
-            printf("Tuple idx %d value %ld\n",j,partitions[i]->tuples[j].payload);
-        }
-    }
-    */
-    
+    Print_Output();
 #endif
 
     return 0;
