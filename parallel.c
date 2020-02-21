@@ -360,7 +360,7 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
     }
 
     // allocate shared buffer
-    buffer = malloc( NUM_VALUES * sizeof(Tuple) );
+    buffer = malloc( NUM_VALUES * sizeof(Tuple) * SLACK );
 
     // allocate writers
     writers = (pthread_t *)malloc(NUM_THREADS * sizeof(pthread_t));
