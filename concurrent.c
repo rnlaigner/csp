@@ -8,8 +8,8 @@
 
 /* ======== DEFINITIONS ======== */
 
-#define VERBOSE 1
-#define CARDINALITY 4
+#define VERBOSE 0
+#define CARDINALITY 24
 #define SLACK 1.5
 
 /* ======== DEFAULT VARIABLE VALUES ======== */
@@ -129,6 +129,10 @@ void * writer(void *args) {
     // For each value, mount the tuple and assigns it to given partition
     for (i = start; i <= end; i++) {
         
+
+#if (VERBOSE == 1)
+        printf("Thread %d trying index %d of input\n",id,i);
+#endif
         tuple = &input[i];
 
         //partition = tuple->key % NUM_PARTITIONS;
@@ -139,11 +143,15 @@ void * writer(void *args) {
 
         nxtfree = partitions[partition]->nxtfree;
 
-        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
+#if (VERBOSE == 1)
+        printf("Thread %d trying to write in index %d of partition %d\n",id,nxtfree,partition);
+#endif
 
-        partitions[partition]->nxtfree = nxtfree + 1;
+        partitions[partition]->nxtfree++;
 
         pthread_mutex_unlock(&partitions[partition]->mutex);
+
+        memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
 
     }
     
@@ -157,11 +165,7 @@ void Process_Input(){
     Tuple * tuple;
     for(i = 0; i < NUM_VALUES;i++){
         // get last bits
-        key = i & HASH_BITS;        
-
-#if(VERBOSE == 1)
-        printf("Value %d, hash %ld\n",i,key);
-#endif
+        key = i & HASH_BITS;
         tuple = malloc( sizeof(Tuple) );
         tuple->key = key;
         // it could also be a random number
@@ -200,6 +204,10 @@ void Collect_Timing_Info(){
 
             local_a = start + ((aux * (i+1)) - aux);     
             local_b = local_a + aux - 1;
+
+#if (VERBOSE == 1)
+        printf("Thread #%d range is %d to %d\n", i, local_a, local_b);
+#endif
     
             thread_info_array[i] = malloc( sizeof(ThreadInfo) );
             thread_info_array[i]->id = i;
@@ -222,6 +230,7 @@ void Collect_Timing_Info(){
         time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
 
         run[trial] = time_spent;
+
 #if (VERBOSE == 1)
         printf("Trial #%d took %f seconds to execute\n", trial, time_spent);
 #endif
@@ -288,10 +297,7 @@ void Touch_Partitions(){
     for(i = 0; i < NUM_PARTITIONS; i++) {
         // TODO touch every index of every partition is not time-effective.. is the right thing to do?
         //for(j = 0; j < partition_sz; j++){
-        for(j = 0; j < 1; j++){
-#if(VERBOSE == 1)
-            printf("Touching index %d of partition %d .. value is %ld\n",j,i,partitions[i]->tuples[j].payload);
-#endif
+        for(j = 0; j < PARTITION_SIZE; j++){
             v_touched = partitions[i]->tuples[j].payload;
         }
     }
@@ -318,8 +324,8 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
     HASH_BITS = atoi(argv[2]);
     TRIALS = atoi(argv[3]);
 
-    if(NUM_THREADS % 2 > 0){
-        fprintf(stderr, "ERROR: Cannot accept an odd number of threads\n");
+    if(NUM_THREADS % 2 > 0 && NUM_THREADS != 1){
+        fprintf(stderr, "ERROR: Cannot accept 1 or an odd number of threads greater than 1\n");
         exit(0);
     }
 
@@ -331,8 +337,16 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
     /* if we consider our hash function divides the tuples to partitions evenly,
      then we can increase 50% the size of the partition in order to not deal
      with resizing during partitioning process */
-    int partition_sz = (NUM_VALUES / NUM_THREADS);
+    int partition_sz = (NUM_VALUES / NUM_PARTITIONS);
     PARTITION_SIZE = partition_sz * SLACK;
+
+#if(VERBOSE==1)
+    printf("NUM_VALUES == %d\n",NUM_VALUES);
+    printf("NUM_PARTITIONS == %d\n",NUM_PARTITIONS);
+
+    printf("partition_sz == %d\n",partition_sz);
+    printf("PARTITION_SIZE == %d\n",PARTITION_SIZE);
+#endif
 
     // alloc array that stores reference to output partitions
     partitions = malloc( NUM_PARTITIONS * sizeof(Partition) );
@@ -359,7 +373,7 @@ void Print_Output(){
     // Exhibit number of elements per partition
     for(i = 0; i < NUM_PARTITIONS; i++) {
         idx = partitions[i]->nxtfree;
-	    printf("Accessing partition %d\n",i);
+        printf("Accessing partition %d\n",i);
         printf("Number of elements == %d\n", idx);
     }    
    
@@ -395,7 +409,7 @@ int main(int argc, char *argv[]) {
     Output_Timing_Result_To_File();
 
 #if (VERBOSE == 1)
-    Print_Output();
+    // Print_Output();
 #endif
 
     return 0;
