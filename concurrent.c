@@ -4,11 +4,12 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+// #include <time.h>
+#include <sys/time.h>
 
 /* ======== DEFINITIONS ======== */
 
-#define VERBOSE 0
+#define VERBOSE 1
 #define CARDINALITY 24
 #define SLACK 1.5
 
@@ -28,10 +29,9 @@ typedef struct tuple {
 // can use `Tuple* tp` instead of `struct tuple* tp`
 
 typedef struct partition {
-    int nxtfree;
+    volatile int nxtfree;
     Tuple* tuples;
-    // TODO change to atomic intrinsics
-    pthread_mutex_t mutex;
+    volatile int lock;
 } Partition;
 
 typedef Partition * partition_t;
@@ -74,7 +74,7 @@ int NUM_VALUES;
 thread_info_t * thread_info_array;
 
 /* store timing information for each trial */
-float * run;
+double * run;
 
 /* store number of trials of the experiment */
 int TRIALS;
@@ -129,27 +129,27 @@ void * writer(void *args) {
     // For each value, mount the tuple and assigns it to given partition
     for (i = start; i <= end; i++) {
         
-
-#if (VERBOSE == 1)
-        printf("Thread %d trying index %d of input\n",id,i);
-#endif
         tuple = &input[i];
 
-        //partition = tuple->key % NUM_PARTITIONS;
+        // TODO not working
+        // partition = tuple->key % NUM_PARTITIONS;
+        // partition = i % NUM_PARTITIONS;
         partition = Hash(i);
 
+#if (VERBOSE == 1)
+    //printf("Thread id %d will write to partition %d\n", id, partition);
+#endif
+
         // access partitions
-        pthread_mutex_lock(&partitions[partition]->mutex);
+        while (__sync_lock_test_and_set(&partitions[partition]->lock, 1)); //while (partitions[partition]->lock);
 
         nxtfree = partitions[partition]->nxtfree;
 
-#if (VERBOSE == 1)
-        printf("Thread %d trying to write in index %d of partition %d\n",id,nxtfree,partition);
-#endif
+        //nxtfree = __sync_fetch_and_add( &(partitions[partition]->nxtfree) , 1);
 
         partitions[partition]->nxtfree++;
-
-        pthread_mutex_unlock(&partitions[partition]->mutex);
+        
+        __sync_lock_release(&partitions[partition]->lock);
 
         memcpy( &(partitions[partition]->tuples[nxtfree]), tuple, sizeof(Tuple) );
 
@@ -183,51 +183,60 @@ Tuple * Alloc_Tuples() {
 partition_t Alloc_Partition() {
     partition_t partition = malloc( sizeof(Partition) );
     partition->tuples = Alloc_Tuples();
-    pthread_mutex_init(&partition->mutex, NULL);
+    partition->lock = 0;
+
     return partition;
 }
 
 void Collect_Timing_Info(){
     int i, trial;
     double time_spent;
-    clock_t begin, end;
+    // clock_t begin, end;
+    // time_t start, end;
+//    struct timespec start, end;
+    struct timeval start, end;
     int local_a, local_b;
-    int start = 0;
+    int start_idx = 0;
     int aux = (NUM_VALUES / NUM_THREADS);
 
     for(trial = 0; trial < TRIALS; trial++){
 
-        begin = clock();
+        // begin = clock();
+        // time(&start);
+        //clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+        gettimeofday(&start, NULL);
        
         // create threads; pass by parameter its respective range of indexes
         for(i = 0; i < NUM_THREADS; i++){
-
-            local_a = start + ((aux * (i+1)) - aux);     
+            local_a = start_idx + ((aux * (i+1)) - aux);     
             local_b = local_a + aux - 1;
-
 #if (VERBOSE == 1)
         printf("Thread #%d range is %d to %d\n", i, local_a, local_b);
 #endif
-    
             thread_info_array[i] = malloc( sizeof(ThreadInfo) );
             thread_info_array[i]->id = i;
             thread_info_array[i]->start = local_a;
             thread_info_array[i]->end = local_b;
-
             if(pthread_create( &(writers[i]), NULL, writer, thread_info_array[i]) != 0) {
                 fprintf(stderr, "ERROR: Cannot create thread # %d\n", i);
                 exit(0);
             }
-
         }
 
         for (i = 0; i < NUM_THREADS; i++) {
             pthread_join(writers[i], NULL);
         }
 
-        end = clock();
+        //end = clock();
+        // time(&end);
+//        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        gettimeofday(&end, NULL);
+        time_spent = (double)(end.tv_usec - start.tv_usec) / 1000000 + (double)(end.tv_sec - start.tv_sec);
+        //printf("time taken %f\n",secs);
 
-        time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
+        // time_spent = (double) (end - begin) / CLOCKS_PER_SEC;
+        // time_spent = difftime(end, start);
+        //uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
 
         run[trial] = time_spent;
 
@@ -257,7 +266,7 @@ void Output_Timing_Result_To_File(){
     }
 
     int trial;
-    float avg, sum;
+    double avg, sum;
     sum = 0.0;
 
     for(trial = 0; trial < TRIALS; trial++){
@@ -329,7 +338,7 @@ void Parse_Input_And_Perform_Memory_Allocs(int argc, char *argv[]){
         exit(0);
     }
 
-    run = malloc( TRIALS * sizeof(float) );
+    run = malloc( TRIALS * sizeof(double) );
 
     NUM_VALUES = pow(2,CARDINALITY);
     NUM_PARTITIONS = pow(2,HASH_BITS);
@@ -377,6 +386,7 @@ void Print_Output(){
         printf("Number of elements == %d\n", idx);
     }    
    
+/*
     // teste para ver o que esta em cada particao
     for(i = 0; i < NUM_PARTITIONS; i++) {
         printf("Accessing partition %d\n",i);
@@ -384,7 +394,7 @@ void Print_Output(){
             printf("Tuple idx %d value %ld\n",j,partitions[i]->tuples[j].payload);
         }
     }
-
+*/
 }
 
 void Disalloc(){
